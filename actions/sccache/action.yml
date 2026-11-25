@@ -19,7 +19,11 @@ runs:
       env:
         R2_URL: ${{ inputs.r2-url }}
       run: |
-        py="$(command -v python3 || command -v python)"
+        py=""
+        for p in python3 python; do
+          if "$p" -c "import sys" >/dev/null 2>&1; then py="$p"; break; fi
+        done
+        [ -n "$py" ] || { echo "No working Python interpreter found" >&2; exit 1; }
         "$py" - <<'PY'
         import json, os, subprocess
         from pathlib import Path
