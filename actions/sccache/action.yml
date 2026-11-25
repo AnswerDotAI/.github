@@ -25,7 +25,7 @@ runs:
         done
         [ -n "$py" ] || { echo "No working Python interpreter found" >&2; exit 1; }
         "$py" - <<'PY'
-        import json, os, subprocess
+        import json, os, subprocess, sys
         from pathlib import Path
         from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -47,16 +47,21 @@ runs:
         elif ak is None: s3["rw_mode"] = "READ_ONLY"
 
         def tv(v): return ("true" if v else "false") if isinstance(v, bool) else json.dumps(v)
-        cfg = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "sccache.toml"
+        tmp = Path(os.environ.get("RUNNER_TEMP", "/tmp"))
+        cfg, err_log = tmp / "sccache.toml", tmp / "sccache.log"
         ws = os.environ.get("GITHUB_WORKSPACE")
         header = f"basedirs = [{json.dumps(ws)}]\n\n" if ws else ""
         cfg.write_text(header + "[cache.s3]\n" + "\n".join(f"{k} = {tv(v)}" for k, v in s3.items()) + "\n")
 
         env = {k: v for k, v in os.environ.items() if k not in ("R2_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE")}
-        env.update(SCCACHE_CONF=str(cfg), SCCACHE_IDLE_TIMEOUT="0")
+        env.update(SCCACHE_CONF=str(cfg), SCCACHE_IDLE_TIMEOUT="0", SCCACHE_SKIP_CACHE_CHECK="1", SCCACHE_ERROR_LOG=str(err_log))
         if ak is not None: env.update(AWS_ACCESS_KEY_ID=ak, AWS_SECRET_ACCESS_KEY=sk)
         subprocess.run(["sccache", "--stop-server"], env=env, capture_output=True)
-        subprocess.run(["sccache", "--start-server"], env=env, check=True)
+        err_log.unlink(missing_ok=True)
+        r = subprocess.run(["sccache", "--start-server"], env=env)
+        if r.returncode:
+            if err_log.exists() and (log := err_log.read_text(errors="replace")): print(log, file=sys.stderr)
+            raise SystemExit(r.returncode)
         PY
         echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
         echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
